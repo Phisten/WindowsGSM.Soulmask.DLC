@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Net;
 using System.Threading.Tasks;
+using System.Net.Sockets;
 using WindowsGSM.Functions;
 using WindowsGSM.GameServer.Engine;
 using WindowsGSM.GameServer.Query;
@@ -47,6 +48,11 @@ namespace WindowsGSM.Plugins
         public string Port = "8777";
         public string QueryPort = "27015";
         public string Additional = "-UTF8Output -forcepassthrough -server -log -EchoPort=18888 -pve -saving=300 -backup=900";
+
+        // EchoPort 設定（必須與啟動指令的 -EchoPort 一致）
+        private const int EchoPort = 18888;
+        // SaveAndExit 倒數秒數，玩家會收到倒數通知
+        private const int ShutdownCountdown = 60;
 
         private Dictionary<string, string> configData = new Dictionary<string, string>();
 
@@ -102,6 +108,7 @@ namespace WindowsGSM.Plugins
                     p.BeginOutputReadLine();
                     p.BeginErrorReadLine();
                 }
+
                 return p;
             }
             catch (Exception e)
@@ -113,37 +120,70 @@ namespace WindowsGSM.Plugins
 
         // - Stop server function
         //
-        // 根據實測 log 確認：
-        //   直接對視窗句柄送 Ctrl+C 才會完整觸發 DB 存檔流程
-        //   寫入 world.db 約需 7-10 秒，整個關閉流程約 20 秒
+        // 透過 EchoPort (Telnet) 送出官方關服指令：
+        //   1. SayToSystemChannel — 廣播關服通知給所有在線玩家
+        //   2. SaveAndExit 60     — 存檔並在 60 秒後關閉，玩家畫面會顯示倒數
+        //
+        // 官方指令參考：https://saraserenity.net/soulmask/remote_console.php
         public async Task Stop(Process p)
         {
-            await Task.Run(() =>
+            await Task.Run(async () =>
             {
-                try
+                bool telnetSuccess = await SendTelnetShutdown();
+
+                if (!telnetSuccess)
                 {
-                    // 直接對遊戲視窗句柄送 Ctrl+C
-                    // 觸發完整關閉流程：SAVE ALL PLAYERS → save all actor → world.db closed
-                    Functions.ServerConsole.SetMainWindow(p.MainWindowHandle);
-                    Functions.ServerConsole.SendWaitToMainWindow("^c");
-                }
-                catch
-                {
-                    // 視窗已不存在或取得句柄失敗，伺服器可能已自行結束，忽略
+                    // Telnet 失敗（EchoPort 未開或連線失敗）時 fallback
+                    // 直接等 WaitForExit，讓 WindowsGSM 在 timeout 後自行處理
                 }
 
                 try
                 {
-                    // 等待 process 真正結束，最多等 60 秒
-                    // 實測約 20 秒，60 秒是為了應對伺服器負載較高時寫入較慢的情況
-                    // 若 60 秒內結束會立即返回
-                    p.WaitForExit(60000);
+                    // 等待時間 = ShutdownCountdown + 存檔時間 + 緩衝
+                    // 60 秒倒數 + 最多 30 秒存檔 = 最多等 90 秒
+                    p.WaitForExit((ShutdownCountdown + 30) * 1000);
                 }
                 catch
                 {
                     // process 已不存在，忽略
                 }
             });
+        }
+
+        // 透過 Telnet 連接 EchoPort，送出廣播與關服指令
+        // 回傳 true 代表指令成功送出
+        private async Task<bool> SendTelnetShutdown()
+        {
+            try
+            {
+                using var client = new System.Net.Sockets.TcpClient();
+
+                // 嘗試連線，3 秒逾時
+                var connectTask = client.ConnectAsync("127.0.0.1", EchoPort);
+                if (await Task.WhenAny(connectTask, Task.Delay(3000)) != connectTask
+                    || !client.Connected)
+                {
+                    return false;
+                }
+
+                var stream = client.GetStream();
+                var writer = new System.IO.StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+
+                // 廣播關服通知，所有在線玩家都會收到
+                await writer.WriteLineAsync($"SayToSystemChannel Server will restart in {ShutdownCountdown} seconds. Please find a safe location.");
+
+                // 短暫等待確保廣播送達
+                await Task.Delay(500);
+
+                // 存檔並倒數關閉，玩家畫面會顯示倒數計時
+                await writer.WriteLineAsync($"SaveAndExit {ShutdownCountdown}");
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         // - Update server function
@@ -156,6 +196,7 @@ namespace WindowsGSM.Plugins
                 loginAnonymous: loginAnonymous
             );
             await Task.Run(() => { p.WaitForExit(); });
+
             return p;
         }
 
@@ -168,18 +209,21 @@ namespace WindowsGSM.Plugins
         {
             string exePath = Path.Combine(path, "PackageInfo.bin");
             Error = $"Invalid Path! Fail to find {Path.GetFileName(exePath)}";
+
             return File.Exists(exePath);
         }
 
         public string GetLocalBuild()
         {
             var steamCMD = new Installer.SteamCMD();
+
             return steamCMD.GetLocalBuild(_serverData.ServerID, AppId);
         }
 
         public async Task<string> GetRemoteBuild()
         {
             var steamCMD = new Installer.SteamCMD();
+
             return await steamCMD.GetRemoteBuild(AppId);
         }
     }
