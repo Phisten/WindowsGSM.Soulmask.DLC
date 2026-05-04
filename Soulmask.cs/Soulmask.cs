@@ -49,12 +49,18 @@ namespace WindowsGSM.Plugins
         public string QueryPort = "27015";
         public string Additional = "-UTF8Output -forcepassthrough -server -log -EchoPort=18888 -pve -saving=300 -backup=900";
 
-        // EchoPort 設定（必須與啟動指令的 -EchoPort 一致）
-        private const int EchoPort = 18888;
         // SaveAndExit 倒數秒數，玩家會收到倒數通知
-        private const int ShutdownCountdown = 60;
+        private const int ShutdownCountdown = 10;
 
-        private Dictionary<string, string> configData = new Dictionary<string, string>();
+        // 從 ServerParam 讀取使用者設定的 -EchoPort 值，找不到則 fallback 到 18888
+        private int GetEchoPort()
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                _serverData.ServerParam ?? "",
+                @"-EchoPort=(\d+)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return match.Success && int.TryParse(match.Groups[1].Value, out int port) ? port : 18888;
+        }
 
         // - Create a default cfg for the game server after installation
         public void CreateServerCFG() { }
@@ -122,7 +128,7 @@ namespace WindowsGSM.Plugins
         //
         // 透過 EchoPort (Telnet) 送出官方關服指令：
         //   1. SayToSystemChannel — 廣播關服通知給所有在線玩家
-        //   2. SaveAndExit 60     — 存檔並在 60 秒後關閉，玩家畫面會顯示倒數
+        //   2. SaveAndExit 10     — 存檔並在 10 秒後關閉，玩家畫面會顯示倒數
         //
         // 官方指令參考：https://saraserenity.net/soulmask/remote_console.php
         public async Task Stop(Process p)
@@ -139,8 +145,7 @@ namespace WindowsGSM.Plugins
 
                 try
                 {
-                    // 等待時間 = ShutdownCountdown + 存檔時間 + 緩衝
-                    // 60 秒倒數 + 最多 30 秒存檔 = 最多等 90 秒
+                    // ShutdownCountdown 倒數 + 最多 30 秒存檔，共等 40 秒
                     p.WaitForExit((ShutdownCountdown + 30) * 1000);
                 }
                 catch
@@ -159,7 +164,7 @@ namespace WindowsGSM.Plugins
                 using var client = new System.Net.Sockets.TcpClient();
 
                 // 嘗試連線，3 秒逾時
-                var connectTask = client.ConnectAsync("127.0.0.1", EchoPort);
+                var connectTask = client.ConnectAsync("127.0.0.1", GetEchoPort());
                 if (await Task.WhenAny(connectTask, Task.Delay(3000)) != connectTask
                     || !client.Connected)
                 {

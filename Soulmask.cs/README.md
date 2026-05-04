@@ -73,13 +73,14 @@ All core params are automatically set by WindowsGSM. These can be overridden via
 
 The original plugin sent shutdown signals via `stdin`, which caused **world data (world.db) to not be saved** on restart — only player data was stored, resulting in rollbacks.
 
-This fork fixes the issue by sending Ctrl+C directly to the **server window handle**, which correctly triggers the full shutdown sequence:
+This fork fixes the issue by connecting to the server's **EchoPort (Telnet)** and sending the official shutdown sequence:
 
-```
-SAVE ALL PLAYERS → save all actor → world.db closed
-```
+1. `SayToSystemChannel` — broadcasts a warning to all online players
+2. `SaveAndExit 10` — saves world data and shuts down after a 10-second countdown
 
-The plugin waits for the process to fully exit (up to 60 seconds) before returning, ensuring no data loss.
+The plugin waits up to 40 seconds for the process to fully exit before returning, ensuring no data loss.
+
+> **Note:** The `-EchoPort` value is read dynamically from the "Additional" field at shutdown time — if you change it, the plugin will automatically use the new port without any extra configuration.
 
 ---
 
