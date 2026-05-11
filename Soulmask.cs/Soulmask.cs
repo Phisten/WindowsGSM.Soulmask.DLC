@@ -52,15 +52,21 @@ namespace WindowsGSM.Plugins
         // SaveAndExit 倒數秒數，玩家會收到倒數通知
         private const int ShutdownCountdown = 10;
 
-        // 從 ServerParam 讀取使用者設定的 -EchoPort 值，找不到則 fallback 到 18888
-        private int GetEchoPort()
+        // Start 時快取 EchoPort（Stop 呼叫時 WindowsGSM 不傳 ServerConfig）
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, int> _echoPortCache
+            = new System.Collections.Concurrent.ConcurrentDictionary<int, int>();
+
+        private static int ParseEchoPort(string param)
         {
             var match = System.Text.RegularExpressions.Regex.Match(
-                _serverData.ServerParam ?? "",
+                param ?? "",
                 @"-EchoPort=(\d+)",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             return match.Success && int.TryParse(match.Groups[1].Value, out int port) ? port : 18888;
         }
+
+        private static int GetEchoPort(Process p)
+            => p != null && _echoPortCache.TryGetValue(p.Id, out int cached) ? cached : 18888;
 
         // - Create a default cfg for the game server after installation
         public void CreateServerCFG() { }
@@ -109,6 +115,10 @@ namespace WindowsGSM.Plugins
             try
             {
                 p.Start();
+
+                // 快取此伺服器的 EchoPort，供 Stop 使用
+                _echoPortCache[p.Id] = ParseEchoPort(_serverData?.ServerParam ?? "");
+
                 if (AllowsEmbedConsole)
                 {
                     p.BeginOutputReadLine();
@@ -126,16 +136,13 @@ namespace WindowsGSM.Plugins
 
         // - Stop server function
         //
-        // 透過 EchoPort (Telnet) 送出官方關服指令：
-        //   1. SayToSystemChannel — 廣播關服通知給所有在線玩家
-        //   2. SaveAndExit 10     — 存檔並在 10 秒後關閉，玩家畫面會顯示倒數
-        //
+        // 透過 EchoPort (Telnet) 送出 SaveAndExit，伺服器存檔後倒數關閉
         // 官方指令參考：https://saraserenity.net/soulmask/remote_console.php
         public async Task Stop(Process p)
         {
             await Task.Run(async () =>
             {
-                bool telnetSuccess = await SendTelnetShutdown();
+                bool telnetSuccess = await SendTelnetShutdown(p);
 
                 if (!telnetSuccess)
                 {
@@ -155,39 +162,64 @@ namespace WindowsGSM.Plugins
             });
         }
 
-        // 透過 Telnet 連接 EchoPort，送出廣播與關服指令
+        // 透過 Telnet 連接 EchoPort，送出關服指令
+        // 在 Task.Run 內執行，使用同步 Connect 避免 async 計時問題
         // 回傳 true 代表指令成功送出
-        private async Task<bool> SendTelnetShutdown()
+        private async Task<bool> SendTelnetShutdown(Process p)
         {
             try
             {
-                using var client = new System.Net.Sockets.TcpClient();
+                using var tcp = new System.Net.Sockets.TcpClient();
+                tcp.Connect("127.0.0.1", GetEchoPort(p));
 
-                // 嘗試連線，3 秒逾時
-                var connectTask = client.ConnectAsync("127.0.0.1", GetEchoPort());
-                if (await Task.WhenAny(connectTask, Task.Delay(3000)) != connectTask
-                    || !client.Connected)
-                {
-                    return false;
-                }
+                var stream = tcp.GetStream();
+                await NegotiateTelnetAsync(stream, millisecondsWait: 500);
 
-                var stream = client.GetStream();
-                var writer = new System.IO.StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+                byte[] cmd = Encoding.ASCII.GetBytes($"SaveAndExit {ShutdownCountdown}\r\n");
+                await stream.WriteAsync(cmd, 0, cmd.Length);
 
-                // 廣播關服通知，所有在線玩家都會收到
-                await writer.WriteLineAsync($"SayToSystemChannel Server will restart in {ShutdownCountdown} seconds. Please find a safe location.");
-
-                // 短暫等待確保廣播送達
-                await Task.Delay(500);
-
-                // 存檔並倒數關閉，玩家畫面會顯示倒數計時
-                await writer.WriteLineAsync($"SaveAndExit {ShutdownCountdown}");
-
+                await Task.Delay(1000);
                 return true;
             }
             catch
             {
                 return false;
+            }
+        }
+
+        // 處理 Telnet IAC 協商：WILL → DONT、DO → WONT
+        // 伺服器完成協商後才會接受後續的文字命令
+        private static async Task NegotiateTelnetAsync(NetworkStream stream, int millisecondsWait)
+        {
+            const byte IAC = 255, DONT = 254, DO = 253, WONT = 252, WILL = 251;
+            var buf = new byte[256];
+            var deadline = Task.Delay(millisecondsWait);
+
+            while (!deadline.IsCompleted)
+            {
+                if (!stream.DataAvailable)
+                {
+                    await Task.Delay(20);
+                    continue;
+                }
+
+                int n = await stream.ReadAsync(buf, 0, buf.Length);
+                int i = 0;
+                while (i < n)
+                {
+                    if (buf[i] == IAC && i + 2 < n)
+                    {
+                        byte verb = buf[i + 1];
+                        byte opt  = buf[i + 2];
+                        byte[] reply = verb == WILL ? new[] { IAC, DONT, opt }
+                                     : verb == DO   ? new[] { IAC, WONT, opt }
+                                     : null;
+                        if (reply != null)
+                            await stream.WriteAsync(reply, 0, reply.Length);
+                        i += 3;
+                    }
+                    else i++;
+                }
             }
         }
 
