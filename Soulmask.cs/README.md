@@ -45,7 +45,7 @@
 |------|----------|-------------|
 | 8777 | UDP | Game port (default) |
 | 27015 | UDP | Steam query port |
-| 18888 | TCP | EchoPort / Telnet maintenance (local only) |
+| 18888 | TCP | EchoPort / Telnet (optional, for manual console access) |
 
 ---
 
@@ -60,7 +60,7 @@ All core params are automatically set by WindowsGSM. These can be overridden via
 | `-MaxPlayers=10` | Max player count |
 | `-Port=8777` | Game port |
 | `-QueryPort=27015` | Steam query port |
-| `-EchoPort=18888` | Telnet maintenance port (required for safe shutdown) |
+| `-EchoPort=18888` | Telnet maintenance port (optional, for manual console access) |
 | `-pve` | Enable PvE mode. Replace with `-pvp` for PvP |
 | `-PSW=""` | Server join password (optional) |
 | `-adminpsw=""` | Admin/GM password |
@@ -73,14 +73,9 @@ All core params are automatically set by WindowsGSM. These can be overridden via
 
 The original plugin sent shutdown signals via `stdin`, which caused **world data (world.db) to not be saved** on restart — only player data was stored, resulting in rollbacks.
 
-This fork fixes the issue by connecting to the server's **EchoPort (Telnet)** and sending the official shutdown sequence:
+This fork fixes the issue by sending **Ctrl+C directly to the server process window**, which triggers the UE5 engine's graceful shutdown sequence — saving all world data before the process exits.
 
-1. `SayToSystemChannel` — broadcasts a warning to all online players
-2. `SaveAndExit 10` — saves world data and shuts down after a 10-second countdown
-
-The plugin waits up to 40 seconds for the process to fully exit before returning, ensuring no data loss.
-
-> **Note:** The `-EchoPort` value is read dynamically from the "Additional" field at shutdown time — if you change it, the plugin will automatically use the new port without any extra configuration.
+The plugin waits up to 60 seconds for the process to fully exit before returning, ensuring no data loss.
 
 ---
 
