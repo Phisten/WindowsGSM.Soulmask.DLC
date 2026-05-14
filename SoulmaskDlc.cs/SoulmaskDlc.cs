@@ -9,7 +9,7 @@ using WindowsGSM.GameServer.Query;
 
 namespace WindowsGSM.Plugins
 {
-    public class Soulmask : SteamCMDAgent
+    public class SoulmaskDlc : SteamCMDAgent
     {
         // - Plugin Details
         public Plugin Plugin = new Plugin
@@ -23,7 +23,7 @@ namespace WindowsGSM.Plugins
         };
 
         // - Standard Constructor and properties
-        public Soulmask(ServerConfig serverData) : base(serverData) => base.serverData = _serverData = serverData;
+        public SoulmaskDlc(ServerConfig serverData) : base(serverData) => base.serverData = _serverData = serverData;
         private readonly ServerConfig _serverData;
         public string Error, Notice;
 

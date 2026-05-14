@@ -18,10 +18,10 @@
 ### Plugin Installation
 
 1. Download the [latest release](https://github.com/Phisten/WindowsGSM.Soulmask.DLC/releases/latest)
-2. Extract and move **Soulmask.cs** into the **plugins** folder
+2. Extract and move **SoulmaskDlc.cs** into the **plugins** folder
 3. OR press the Puzzle Icon in the bottom-left and install by selecting the zip file
 4. Click **[RELOAD PLUGINS]** or restart WindowsGSM
-5. Navigate to "Servers" → "Install Game Server" → find **Soulmask dlc Shifting Sands Dedicated Server [Soulmask.cs]**
+5. Navigate to "Servers" → "Install Game Server" → find **Soulmask dlc Shifting Sands Dedicated Server [SoulmaskDlc.cs]**
 
 ---
 
