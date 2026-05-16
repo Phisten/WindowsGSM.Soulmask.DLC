@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using WindowsGSM.Functions;
@@ -17,15 +18,19 @@ namespace WindowsGSM.Plugins
             name = "WindowsGSM.Soulmask.DLC",
             author = "Phisten",
             description = "WindowsGSM plugin for supporting Soulmask Dedicated Server",
-            version = "1.1",
+            version = "1.2",
             url = "https://github.com/Phisten/WindowsGSM.Soulmask.DLC",
             color = "#1E8449"
         };
 
+        // - Win32 API
+        [DllImport("user32.dll")]
+        private static extern bool AllowSetForegroundWindow(int dwProcessId);
+
         // - Standard Constructor and properties
         public SoulmaskDlc(ServerConfig serverData) : base(serverData) => base.serverData = _serverData = serverData;
         private readonly ServerConfig _serverData;
-        public string Error, Notice;
+        public new string Error, Notice;
 
         // - Settings properties for SteamCMD installer
         public override bool loginAnonymous => true;
@@ -108,31 +113,43 @@ namespace WindowsGSM.Plugins
         }
 
         // - Stop server function
-        // 對伺服器視窗送 Ctrl+C 觸發 graceful shutdown
+        // 對伺服器視窗送 Ctrl+C 觸發 graceful shutdown（含存檔）
         public async Task Stop(Process p)
         {
-            await Task.Run(() =>
+            await Task.Run(async () =>
             {
-                Functions.ServerConsole.SetMainWindow(p.MainWindowHandle);
-                Functions.ServerConsole.SendWaitToMainWindow("^c");
+                try
+                {
+                    // 刷新 Process 狀態，確保 MainWindowHandle 是最新值
+                    p.Refresh();
+
+                    // 允許切換前景視窗（自動重啟時 WindowsGSM 可能不是前景視窗）
+                    AllowSetForegroundWindow(Process.GetCurrentProcess().Id);
+
+                    Functions.ServerConsole.SetMainWindow(p.MainWindowHandle);
+                    Functions.ServerConsole.SendWaitToMainWindow("^c");
+                }
+                catch
+                {
+                    // 忽略例外，讓 WindowsGSM 自行處理 kill
+                }
 
                 try
                 {
                     p.WaitForExit(60000);
-
                 }
                 catch
                 {
                     // process 已不存在，忽略
                 }
-                    
-                // 額外等待10秒防止重啟過快
+
+                // 額外等待 10 秒防止重啟過快
                 await Task.Delay(10000);
             });
         }
 
         // - Update server function
-        public async Task<Process> Update(bool validate = false, string custom = null)
+        public new async Task<Process> Update(bool validate = false, string custom = null)
         {
             var (p, pid) = await Installer.SteamCMD.UpdateEx(
                 _serverData.ServerID,
@@ -145,12 +162,12 @@ namespace WindowsGSM.Plugins
             return p;
         }
 
-        public bool IsInstallValid()
+        public new bool IsInstallValid()
         {
             return File.Exists(Functions.ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath));
         }
 
-        public bool IsImportValid(string path)
+        public new bool IsImportValid(string path)
         {
             string exePath = Path.Combine(path, "PackageInfo.bin");
             Error = $"Invalid Path! Fail to find {Path.GetFileName(exePath)}";
@@ -158,14 +175,14 @@ namespace WindowsGSM.Plugins
             return File.Exists(exePath);
         }
 
-        public string GetLocalBuild()
+        public new string GetLocalBuild()
         {
             var steamCMD = new Installer.SteamCMD();
 
             return steamCMD.GetLocalBuild(_serverData.ServerID, AppId);
         }
 
-        public async Task<string> GetRemoteBuild()
+        public new async Task<string> GetRemoteBuild()
         {
             var steamCMD = new Installer.SteamCMD();
 
