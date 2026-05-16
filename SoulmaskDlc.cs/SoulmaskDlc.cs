@@ -119,11 +119,15 @@ namespace WindowsGSM.Plugins
                 try
                 {
                     p.WaitForExit(60000);
+
                 }
                 catch
                 {
                     // process 已不存在，忽略
                 }
+                    
+                // 額外等待10秒防止重啟過快
+                await Task.Delay(10000);
             });
         }
 
